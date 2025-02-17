@@ -1,8 +1,6 @@
 import bpy
+import os
 
-# -------------------------------------------------------------------
-#   Get Selected and Visible Collections from the Outliner
-# -------------------------------------------------------------------
 def get_selected_collections(context):
     """
     Uses a temporary override to obtain selected collections from the Outliner.
@@ -19,63 +17,107 @@ def get_selected_collections(context):
                         selected.append(id_item)
     return selected
 
-# -------------------------------------------------------------------
-#   Export Only Selected, Visible Objects and Collections
-# -------------------------------------------------------------------
+def find_parent_collection(target, current):
+    """
+    Recursively search for the parent of 'target' starting from 'current'.
+    Returns the parent collection if found, or None otherwise.
+    """
+    for child in current.children:
+        if child == target:
+            return current
+        result = find_parent_collection(target, child)
+        if result is not None:
+            return result
+    return None
+
 def save_selected_mesh(filepath):
-    selected_objects = set(bpy.context.selected_objects)  # Store selected objects
-    selected_collections = get_selected_collections(bpy.context)  # Get selected & visible collections
-
-    # Filter collections: Only include those that contain selected objects
-    valid_collections = {}
-    for collection in selected_collections:
-        objects_in_collection = [obj for obj in collection.objects if obj in selected_objects]
-        if objects_in_collection:  # Keep only collections with selected objects
-            valid_collections[collection] = objects_in_collection
-
-    # Add collection objects to selection
-    for collection_objs in valid_collections.values():
-        selected_objects.update(collection_objs)
-
-    if not selected_objects:
-        print("No objects or valid collections selected!")
+    # 1. Gather selected objects and collections.
+    sel_objs = list(bpy.context.selected_objects)
+    sel_colls = get_selected_collections(bpy.context)
+    # Filter: keep only collections that contain at least one selected object.
+    valid_colls = [coll for coll in sel_colls if any(coll.objects.get(obj.name) is not None for obj in sel_objs)]
+    
+    if not sel_objs and not valid_colls:
+        print("No valid objects or collections selected!")
         return {'CANCELLED'}
-
-    # Store the original scene
-    original_scene = bpy.context.window.scene
-
-    # Create a new temporary scene
+    
+    # 2. Record original names for valid collections.
+    orig_names = {coll: coll.name for coll in valid_colls}
+    
+    # 3. Create a temporary scene.
     temp_scene = bpy.data.scenes.new("TempExportScene")
-
-    # Create new collections in the temporary scene and maintain hierarchy
-    collection_mapping = {}
-    for collection, objects in valid_collections.items():
-        new_collection = bpy.data.collections.new(collection.name)  # Duplicate collection
-        temp_scene.collection.children.link(new_collection)  # Link to the temp scene
-        collection_mapping[collection] = new_collection  # Store mapping
-
-    # Link selected objects to the appropriate collections in the temp scene
-    for obj in selected_objects:
-        linked = False
-        for collection in obj.users_collection:
-            if collection in collection_mapping:
-                collection_mapping[collection].objects.link(obj)  # Link to the duplicate collection
-                linked = True
-                break
-        if not linked:  # If object was not in a selected collection, add to main scene collection
-            temp_scene.collection.objects.link(obj)
-
-    # Set the temporary scene as active
-    bpy.context.window.scene = temp_scene
-
-    # Save the file (only objects in the temporary scene will be saved)
-    bpy.ops.wm.save_as_mainfile(filepath=filepath, copy=True)
-
-    # Restore the original scene
-    bpy.context.window.scene = original_scene
-
-    # Remove the temporary scene
+    temp_root = temp_scene.collection  # Root collection of the temporary scene.
+    
+    # 4. In the original file, rename each valid collection by appending "_temp".
+    for coll in valid_colls:
+        coll.name = coll.name + "_temp"
+    
+    # 5. In the temporary scene, duplicate each valid collection.
+    # First pass: create duplicate for each valid collection and link to temp_root.
+    dup_coll_mapping = {}
+    for coll in valid_colls:
+        desired_name = orig_names[coll]
+        dup_coll = bpy.data.collections.new("")
+        dup_coll.name = desired_name  # Force its name to the original name.
+        dup_coll_mapping[coll] = dup_coll
+        temp_root.children.link(dup_coll)
+        # Link selected objects from the original collection.
+        for obj in coll.objects:
+            if obj in sel_objs:
+                try:
+                    dup_coll.objects.link(obj)
+                except RuntimeError:
+                    pass
+                    
+    # 6. Re-establish hierarchy in the temporary scene.
+    # Use the working file's root as the starting point.
+    original_root = bpy.context.scene.collection
+    for coll in valid_colls:
+        # Find parent in the working file hierarchy.
+        parent = find_parent_collection(coll, original_root)
+        if parent and parent in valid_colls:
+            # If the parent is valid, reassign duplicate's parent.
+            child_dup = dup_coll_mapping[coll]
+            parent_dup = dup_coll_mapping[parent]
+            # Unlink child from temp_root if necessary.
+            try:
+                temp_root.children.unlink(child_dup)
+            except Exception:
+                pass
+            parent_dup.children.link(child_dup)
+    # 7. For any selected object not already in a duplicate, link it directly to temp_root.
+    for obj in sel_objs:
+        in_dup = any(dup.objects.get(obj.name) is not None for dup in dup_coll_mapping.values())
+        if not in_dup:
+            try:
+                temp_root.objects.link(obj)
+            except RuntimeError:
+                pass
+                
+    # 8. Build the set of datablocks to export.
+    datablocks = {temp_scene, temp_root} | set(dup_coll_mapping.values())
+    
+    bpy.data.libraries.write(filepath, datablocks=datablocks, path_remap='RELATIVE')
+    
+    # 9. Cleanup: Remove the temporary scene.
     bpy.data.scenes.remove(temp_scene)
-
-    print(f"File saved with selected objects and valid, visible collections: {filepath}")
+    
+    # Optionally, remove any duplicate collections that linger (should be removed with the scene).
+    for dup in dup_coll_mapping.values():
+        try:
+            bpy.data.collections.remove(dup)
+        except Exception as e:
+            print(f"Couldn't remove duplicate collection {dup.name}: {e}")
+    
+    # 10. Restore original collection names in the working file.
+    for coll, orig_name in orig_names.items():
+        if coll.name.endswith("_temp"):
+            coll.name = orig_name
+        else:
+            coll.name = orig_name
+            
+    print(f"Exported selection to {filepath}")
     return {'FINISHED'}
+
+# Example usage:
+# save_selected_mesh("I:/path/to/exported_file.blend")
