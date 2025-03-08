@@ -31,6 +31,10 @@ def find_parent_collection(target, current):
     return None
 
 def save_selected_mesh(filepath):
+    # Automatically add .blend extension if it's missing.
+    if not filepath.lower().endswith('.blend'):
+        filepath += '.blend'
+    
     # 1. Gather selected objects and collections.
     sel_objs = list(bpy.context.selected_objects)
     sel_colls = get_selected_collections(bpy.context)
@@ -68,7 +72,7 @@ def save_selected_mesh(filepath):
                     dup_coll.objects.link(obj)
                 except RuntimeError:
                     pass
-                    
+                        
     # 6. Re-establish hierarchy in the temporary scene.
     # Use the working file's root as the starting point.
     original_root = bpy.context.scene.collection
@@ -93,7 +97,7 @@ def save_selected_mesh(filepath):
                 temp_root.objects.link(obj)
             except RuntimeError:
                 pass
-                
+                    
     # 8. Build the set of datablocks to export.
     datablocks = {temp_scene, temp_root} | set(dup_coll_mapping.values())
     
@@ -115,9 +119,6 @@ def save_selected_mesh(filepath):
             coll.name = orig_name
         else:
             coll.name = orig_name
-            
+                
     print(f"Exported selection to {filepath}")
     return {'FINISHED'}
-
-# Example usage:
-# save_selected_mesh("I:/path/to/exported_file.blend")
