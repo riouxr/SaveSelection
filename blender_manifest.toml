@@ -1,5 +1,5 @@
 schema_version = "1.0.0"
-id = "LightEditor"
+id = "SaveSelection"
 version = "1.0.1"
 name = "Save Selection"
 tagline = "Save selected objects in Blender Format"
@@ -7,6 +7,6 @@ maintainer = "Blender Bob"
 type = "add-on"
 website = "https://github.com/riouxr/SaveSelection"
 tags = ["Mesh"]
-blender_version_min = "3.2.0"
+blender_version_min = "4.2.0"
 license = ["SPDX:GPL-3.0-or-later"]
 copyright = ["2025 Robert Rioux"]
