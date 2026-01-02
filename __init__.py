@@ -1,8 +1,8 @@
 bl_info = {
     "name": "Save Selection as .blend",
     "author": "Blender Bob",
-    "version": (1, 0, 1),
-    "blender": (3, 2, 0),
+    "version": (1, 0, 2),
+    "blender": (4, 2, 0),
     "location": "File > Export > Save Selection",
     "description": "Saves only the selected objects to a new .blend file.",
     "category": "Import-Export",
@@ -18,10 +18,38 @@ class EXPORT_OT_save_selection(bpy.types.Operator):
     bl_label = "Save Selection"
     bl_options = {'REGISTER'}
 
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "place_origin")
+        layout.prop(self, "zero_rot")
+        layout.prop(self, "unit_scale")
+
+
     filepath: bpy.props.StringProperty(subtype="FILE_PATH")
+    place_origin: bpy.props.BoolProperty(
+        name="Place at Origin",
+        description="Move exported objects to world origin (0,0,0)",
+        default=False,
+        options={'SKIP_SAVE'}
+    )
+
+    zero_rot: bpy.props.BoolProperty(
+        name="Set Rotations to 0",
+        description="Clear rotation on exported objects",
+        default=False,
+        options={'SKIP_SAVE'}
+    )
+
+    unit_scale: bpy.props.BoolProperty(
+        name="Set Scale to 1",
+        description="Reset scale on exported objects",
+        default=False,
+        options={'SKIP_SAVE'}
+    )
+
 
     def execute(self, context):
-        save_selected_mesh(self.filepath)
+        save_selected_mesh(self.filepath, place_origin=self.place_origin, zero_rot=self.zero_rot, unit_scale=self.unit_scale)
         return {'FINISHED'}
 
     def invoke(self, context, event):

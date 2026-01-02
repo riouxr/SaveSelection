@@ -101,6 +101,20 @@ def save_selected_mesh(filepath):
     # 8. Build the set of datablocks to export.
     datablocks = {temp_scene, temp_root} | set(dup_coll_mapping.values())
     
+        # === Apply transform options if requested ===
+    if place_origin or zero_rot or unit_scale:
+        for obj in temp_scene.objects:
+            if obj.type in {'MESH', 'CURVE', 'SURFACE', 'META', 'FONT', 'GPENCIL', 'ARMATURE', 'LATTICE', 'EMPTY'}:
+                if place_origin:
+                    obj.location = (0.0, 0.0, 0.0)
+                if zero_rot:
+                    if hasattr(obj, 'rotation_euler'):
+                        obj.rotation_euler = (0.0, 0.0, 0.0)
+                    if hasattr(obj, 'rotation_quaternion'):
+                        obj.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+                if unit_scale:
+                    obj.scale = (1.0, 1.0, 1.0)
+
     bpy.data.libraries.write(filepath, datablocks=datablocks, path_remap='RELATIVE')
     
     # 9. Cleanup: Remove the temporary scene.
