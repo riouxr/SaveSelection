@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "SaveSelection"
-version = "1.0.2"
+version = "1.0.5"
 name = "Save Selection"
 tagline = "Save selected objects in Blender Format"
 maintainer = "Blender Bob"

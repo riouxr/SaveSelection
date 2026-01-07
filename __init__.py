@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Save Selection as .blend",
     "author": "Blender Bob",
-    "version": (1, 0, 2),
+    "version": (1, 0, 5),
     "blender": (4, 2, 0),
     "location": "File > Export > Save Selection",
     "description": "Saves only the selected objects to a new .blend file.",

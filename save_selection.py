@@ -30,7 +30,7 @@ def find_parent_collection(target, current):
             return result
     return None
 
-def save_selected_mesh(filepath):
+def save_selected_mesh(filepath, place_origin=False, zero_rot=False, unit_scale=False):
     # Automatically add .blend extension if it's missing.
     if not filepath.lower().endswith('.blend'):
         filepath += '.blend'
@@ -101,10 +101,20 @@ def save_selected_mesh(filepath):
     # 8. Build the set of datablocks to export.
     datablocks = {temp_scene, temp_root} | set(dup_coll_mapping.values())
     
-        # === Apply transform options if requested ===
+    # === Apply transform options if requested ===
+    # Store original transforms so we can restore them after export
+    original_transforms = {}
     if place_origin or zero_rot or unit_scale:
         for obj in temp_scene.objects:
             if obj.type in {'MESH', 'CURVE', 'SURFACE', 'META', 'FONT', 'GPENCIL', 'ARMATURE', 'LATTICE', 'EMPTY'}:
+                # Store original values
+                original_transforms[obj] = {
+                    'location': obj.location.copy(),
+                    'rotation_euler': obj.rotation_euler.copy() if hasattr(obj, 'rotation_euler') else None,
+                    'rotation_quaternion': obj.rotation_quaternion.copy() if hasattr(obj, 'rotation_quaternion') else None,
+                    'scale': obj.scale.copy()
+                }
+                # Apply requested transforms
                 if place_origin:
                     obj.location = (0.0, 0.0, 0.0)
                 if zero_rot:
@@ -116,6 +126,15 @@ def save_selected_mesh(filepath):
                     obj.scale = (1.0, 1.0, 1.0)
 
     bpy.data.libraries.write(filepath, datablocks=datablocks, path_remap='RELATIVE')
+    
+    # Restore original transforms
+    for obj, transforms in original_transforms.items():
+        obj.location = transforms['location']
+        if transforms['rotation_euler'] is not None:
+            obj.rotation_euler = transforms['rotation_euler']
+        if transforms['rotation_quaternion'] is not None:
+            obj.rotation_quaternion = transforms['rotation_quaternion']
+        obj.scale = transforms['scale']
     
     # 9. Cleanup: Remove the temporary scene.
     bpy.data.scenes.remove(temp_scene)
