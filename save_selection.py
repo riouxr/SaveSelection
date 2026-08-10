@@ -30,6 +30,47 @@ def find_parent_collection(target, current):
             return result
     return None
 
+def create_temp_scene(name="TempExportScene"):
+    """
+    Create the empty scene used to hold the export.
+
+    Deliberately NOT bpy.data.scenes.new(): a scene built that way crashes
+    bpy.data.libraries.write() in Blender 5.2 (EXCEPTION_ACCESS_VIOLATION), even
+    when the scene is completely empty. Copying an existing scene produces one the
+    writer accepts, so we copy the current scene and strip it back to empty.
+
+    Everything that could drag unrelated datablocks into the export (camera, world,
+    sequence editor, markers, compositor tree, linked collections/objects) is cleared,
+    so the result is equivalent to a fresh scene apart from render settings.
+    """
+    temp_scene = bpy.context.scene.copy()
+    temp_scene.name = name
+
+    # Drop pointers that would otherwise pull in unwanted dependencies.
+    temp_scene.camera = None
+    temp_scene.world = None
+    for clear in (temp_scene.sequence_editor_clear, temp_scene.timeline_markers.clear):
+        try:
+            clear()
+        except Exception:
+            pass
+    for attr in ("node_tree", "compositing_node_group"):
+        if hasattr(temp_scene, attr):
+            try:
+                setattr(temp_scene, attr, None)
+            except Exception:
+                pass
+
+    # Empty the master collection: the copy starts out sharing the source scene's contents.
+    temp_root = temp_scene.collection
+    for child in list(temp_root.children):
+        temp_root.children.unlink(child)
+    for obj in list(temp_root.objects):
+        temp_root.objects.unlink(obj)
+
+    return temp_scene
+
+
 def save_selected_mesh(filepath, place_origin=False, zero_rot=False, unit_scale=False):
     # Automatically add .blend extension if it's missing.
     if not filepath.lower().endswith('.blend'):
@@ -49,7 +90,7 @@ def save_selected_mesh(filepath, place_origin=False, zero_rot=False, unit_scale=
     orig_names = {coll: coll.name for coll in valid_colls}
     
     # 3. Create a temporary scene.
-    temp_scene = bpy.data.scenes.new("TempExportScene")
+    temp_scene = create_temp_scene()
     temp_root = temp_scene.collection  # Root collection of the temporary scene.
     
     # 4. In the original file, rename each valid collection by appending "_temp".
@@ -99,59 +140,63 @@ def save_selected_mesh(filepath, place_origin=False, zero_rot=False, unit_scale=
                 pass
                     
     # 8. Build the set of datablocks to export.
-    datablocks = {temp_scene, temp_root} | set(dup_coll_mapping.values())
-    
-    # === Apply transform options if requested ===
+    # temp_scene.collection is the scene's embedded master collection, not a standalone
+    # datablock, so it isn't listed here; writing temp_scene carries it along anyway.
+    # Selected objects are listed explicitly rather than left to scene traversal.
+    datablocks = {temp_scene} | set(dup_coll_mapping.values()) | set(sel_objs)
+
     # Store original transforms so we can restore them after export
     original_transforms = {}
-    if place_origin or zero_rot or unit_scale:
-        for obj in temp_scene.objects:
-            if obj.type in {'MESH', 'CURVE', 'SURFACE', 'META', 'FONT', 'GPENCIL', 'ARMATURE', 'LATTICE', 'EMPTY'}:
-                # Store original values
-                original_transforms[obj] = {
-                    'location': obj.location.copy(),
-                    'rotation_euler': obj.rotation_euler.copy() if hasattr(obj, 'rotation_euler') else None,
-                    'rotation_quaternion': obj.rotation_quaternion.copy() if hasattr(obj, 'rotation_quaternion') else None,
-                    'scale': obj.scale.copy()
-                }
-                # Apply requested transforms
-                if place_origin:
-                    obj.location = (0.0, 0.0, 0.0)
-                if zero_rot:
-                    if hasattr(obj, 'rotation_euler'):
-                        obj.rotation_euler = (0.0, 0.0, 0.0)
-                    if hasattr(obj, 'rotation_quaternion'):
-                        obj.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
-                if unit_scale:
-                    obj.scale = (1.0, 1.0, 1.0)
+    try:
+        # === Apply transform options if requested ===
+        if place_origin or zero_rot or unit_scale:
+            for obj in temp_scene.objects:
+                if obj.type in {'MESH', 'CURVE', 'SURFACE', 'META', 'FONT', 'GPENCIL', 'ARMATURE', 'LATTICE', 'EMPTY'}:
+                    # Store original values
+                    original_transforms[obj] = {
+                        'location': obj.location.copy(),
+                        'rotation_euler': obj.rotation_euler.copy() if hasattr(obj, 'rotation_euler') else None,
+                        'rotation_quaternion': obj.rotation_quaternion.copy() if hasattr(obj, 'rotation_quaternion') else None,
+                        'scale': obj.scale.copy()
+                    }
+                    # Apply requested transforms
+                    if place_origin:
+                        obj.location = (0.0, 0.0, 0.0)
+                    if zero_rot:
+                        if hasattr(obj, 'rotation_euler'):
+                            obj.rotation_euler = (0.0, 0.0, 0.0)
+                        if hasattr(obj, 'rotation_quaternion'):
+                            obj.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+                    if unit_scale:
+                        obj.scale = (1.0, 1.0, 1.0)
 
-    bpy.data.libraries.write(filepath, datablocks=datablocks, path_remap='RELATIVE')
-    
-    # Restore original transforms
-    for obj, transforms in original_transforms.items():
-        obj.location = transforms['location']
-        if transforms['rotation_euler'] is not None:
-            obj.rotation_euler = transforms['rotation_euler']
-        if transforms['rotation_quaternion'] is not None:
-            obj.rotation_quaternion = transforms['rotation_quaternion']
-        obj.scale = transforms['scale']
-    
-    # 9. Cleanup: Remove the temporary scene.
-    bpy.data.scenes.remove(temp_scene)
-    
-    # Optionally, remove any duplicate collections that linger (should be removed with the scene).
-    for dup in dup_coll_mapping.values():
-        try:
-            bpy.data.collections.remove(dup)
-        except Exception as e:
-            print(f"Couldn't remove duplicate collection {dup.name}: {e}")
-    
-    # 10. Restore original collection names in the working file.
-    for coll, orig_name in orig_names.items():
-        if coll.name.endswith("_temp"):
+        bpy.data.libraries.write(filepath, datablocks=datablocks, path_remap='RELATIVE')
+    finally:
+        # Always undo our edits to the working file, even if the export failed, so a
+        # failed export can't leave behind "_temp" collection names or a stray scene.
+
+        # Restore original transforms
+        for obj, transforms in original_transforms.items():
+            obj.location = transforms['location']
+            if transforms['rotation_euler'] is not None:
+                obj.rotation_euler = transforms['rotation_euler']
+            if transforms['rotation_quaternion'] is not None:
+                obj.rotation_quaternion = transforms['rotation_quaternion']
+            obj.scale = transforms['scale']
+
+        # 9. Cleanup: Remove the temporary scene.
+        bpy.data.scenes.remove(temp_scene)
+
+        # Optionally, remove any duplicate collections that linger (should be removed with the scene).
+        for dup in dup_coll_mapping.values():
+            try:
+                bpy.data.collections.remove(dup)
+            except Exception as e:
+                print(f"Couldn't remove duplicate collection {dup.name}: {e}")
+
+        # 10. Restore original collection names in the working file.
+        for coll, orig_name in orig_names.items():
             coll.name = orig_name
-        else:
-            coll.name = orig_name
-                
+
     print(f"Exported selection to {filepath}")
     return {'FINISHED'}
